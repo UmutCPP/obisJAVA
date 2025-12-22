@@ -1,0 +1,9 @@
+# id;username;password;ad;soyad;email;aldigiDersler
+# aldigiDersler: dersKodu:ogretmenId|dersKodu:ogretmenId
+1;ogr1;ogr1;Ayse;Yilmaz;ayse@yuni.edu;MAT101:1:not=77;dev=10;dev=9;dev=2|TUR101:1:not=-;dev=-|CMP203:1:not=-;dev=-|FIZ201:2:not=-;dev=-|INK101:2:not=-;dev=-
+2;ogr2;ogr2;Mehmet;Demir;mehmet@yuni.edu;MAT201:3:not=-;dev=-|CMP201:3:not=-;dev=-|BIL103:3:not=-;dev=-|FIZ201:2:not=-;dev=-|INK101:2:not=-;dev=-
+3;ogr4;ogr4;Graham;Bell;grambel@gram.edu.de;MAT101:1:not=-;dev=-|CMP203:1:not=-;dev=-|FIZ201:2:not=-;dev=-|INK101:2:not=-;dev=-|BIL103:3:not=-;dev=-
+
+
+4;yunus;yunus;yunus;yunus;yunus@gmail.com;INK101:2:not=-;dev=-|MAT201:3:not=-;dev=-|CMP201:3:not=-;dev=-|FIZ201:2:not=-;dev=-|MAT101:1:not=-;dev=-
+
