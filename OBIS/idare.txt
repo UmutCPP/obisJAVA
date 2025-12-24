@@ -1,0 +1,4 @@
+# id;username;password;email;ad;soyad
+1;admin;admin123;admin@yuni.edu;Admin;User
+
+

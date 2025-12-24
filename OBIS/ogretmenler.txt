@@ -1,0 +1,5 @@
+# id;username;password;email;ad;soyad;dersler
+# dersler: MAT101|FIZ201|CMP203
+1;ogrt1;ogrt1;ogrt1@yuni.edu;Ali;Kaya;MAT101|TUR101|CMP203
+2;ogrt2;ogrt2;ogrt2@yuni.edu;Ayse;Demir;FIZ201|INK101
+3;ogrt3;ogrt3;ogrt3@yuni.edu;Mehmet;Yildiz;MAT201|CMP201|BIL103
