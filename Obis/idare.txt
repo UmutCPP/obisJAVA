@@ -1,10 +1,4 @@
 # id;username;password;email;ad;soyad
 1;admin;admin123;admin@yuni.edu;Admin;User
 
-# öğrenci id'sinin otomatik olarak bir artırılması gerekiyor.
-# e-mail formatını kontrol etmeli
-# idare öğrenci ekleyemiyor.
-# idare güncellenmiş öğrencileri listeleyemiyor
-# öğretmen ders seçtikten sonra öğrenci seçerken sadece öğrencinin idsini görüyor. Id sinin yanında ad soyad ve mail adresi de bulunmalı
-# not devamsızlık girme kısmında hem 3. hem 4. seçim aynı: Not / Devamsızlık Gir (Seçimli). Bunların birinde not girme birinde devamsızlık girişi olsun.
 

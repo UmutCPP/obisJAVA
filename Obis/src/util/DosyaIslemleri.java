@@ -90,29 +90,119 @@ public class DosyaIslemleri {
     }
 
     // ===== Embedded ders kaydi formatı =====
-    // item: DERSKODU:OGRETMEN_ID:not=DEGER;dev=DEGER
-    // DEGER: "-" veya sayısal değer
+    // item (v3): DERSKODU:OGRETMEN_ID:...;
+    //   anahtarlar: vize, final, not, dev, prog
+    //   - vize/final/not/dev: "-" veya sayısal değer
+    //   - prog: haftalık program slotları (virgül ile): MON-09,MON-10,WED-14 gibi
+    //
+    // Geriye uyumluluk:
+    // - Eski: DERSKODU:OGRETMEN_ID
+    // - v2:  DERSKODU:OGRETMEN_ID:not=...;dev=...
     public static class EmbeddedDersKaydi {
         public String dersKodu;
         public int ogretmenId;
-        public String notDegeri; // "-" veya sayı (string tutuyoruz, yazmayı kolaylaştırır)
+        // "-" veya sayı (string tutuyoruz, yazmayı kolaylaştırır)
+        public String vizeDegeri;
+        public String finalDegeri;
+        public String notDegeri; // legacy/toplam not (istersen ileride kaldırılabilir)
         public String devDegeri; // "-" veya sayı
+        public String programDegeri; // ör: MON-09,MON-10
 
-        public EmbeddedDersKaydi(String dersKodu, int ogretmenId, String notDegeri, String devDegeri) {
+        public EmbeddedDersKaydi(String dersKodu,
+                                 int ogretmenId,
+                                 String vizeDegeri,
+                                 String finalDegeri,
+                                 String notDegeri,
+                                 String devDegeri,
+                                 String programDegeri) {
             this.dersKodu = dersKodu;
             this.ogretmenId = ogretmenId;
+            this.vizeDegeri = (vizeDegeri == null || vizeDegeri.isBlank()) ? "-" : vizeDegeri;
+            this.finalDegeri = (finalDegeri == null || finalDegeri.isBlank()) ? "-" : finalDegeri;
             this.notDegeri = (notDegeri == null || notDegeri.isBlank()) ? "-" : notDegeri;
             this.devDegeri = (devDegeri == null || devDegeri.isBlank()) ? "-" : devDegeri;
+            this.programDegeri = (programDegeri == null) ? "" : programDegeri.trim();
+        }
+
+        // v2 uyumluluk ctor
+        public EmbeddedDersKaydi(String dersKodu, int ogretmenId, String notDegeri, String devDegeri) {
+            this(dersKodu, ogretmenId, "-", "-", notDegeri, devDegeri, "");
         }
 
         public String toItemString() {
-            return dersKodu + ":" + ogretmenId + ":not=" + notDegeri + ";dev=" + devDegeri;
+            // Kanonik yazım: her key tek kez.
+            // not: legacy alan; vize/final varken tekrar hesaplanabilir ama geriye uyum için saklanıyor.
+            String p = (programDegeri == null) ? "" : programDegeri.trim();
+            // program değeri ; veya | içeremez (dosya formatını bozar). Güvenlik için temizle.
+            p = p.replace(";", ",").replace("|", ",");
+            return dersKodu + ":" + ogretmenId
+                    + ":vize=" + vizeDegeri
+                    + ";final=" + finalDegeri
+                    + ";not=" + notDegeri
+                    + ";dev=" + devDegeri
+                    + ";prog=" + p;
         }
     }
 
-    // Tek bir item'ı parse eder. Eski formatı da destekler:
-    // - Eski: DERSKODU:OGRETMEN_ID
-    // - Yeni: DERSKODU:OGRETMEN_ID:not=...;dev=...
+    // aldigiDersler alanı bozulmuşsa (item içinde '|' yerine ';' sızmışsa) yeniden tokenize eder.
+    // Kural: yeni item başlangıcı -> ^[A-Z]{2,5}\d{3}:\d+  (örn MAT101:1)
+    private static List<String> aldigiDerslerTokenizeGuvenli(String aldigi) {
+        List<String> items = new ArrayList<>();
+        if (aldigi == null) return items;
+        String s = aldigi.replace("\r", "").replace("\n", "").trim();
+        if (s.isEmpty()) return items;
+
+        // Normal durum: '|' ile ayrılır.
+        String[] quick = s.split("\\|", -1);
+        boolean supheli = false;
+        java.util.regex.Pattern startPat = java.util.regex.Pattern.compile("[A-Z]{2,5}\\d{3}:[0-9]+",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
+        for (String q : quick) {
+            // Eğer tek token içinde birden fazla dersKodu:ogretmenId örüntüsü görülüyorsa bozulmuş olabilir.
+            if (q == null) continue;
+            String t = q.trim();
+            if (t.isEmpty()) continue;
+            int count = 0;
+            java.util.regex.Matcher mm = startPat.matcher(t);
+            while (mm.find()) count++;
+            if (count > 1) {
+                supheli = true;
+                break;
+            }
+        }
+        if (!supheli) {
+            for (String q : quick) {
+                if (q == null) continue;
+                String t = q.trim();
+                if (!t.isEmpty()) items.add(t);
+            }
+            return items;
+        }
+
+        // Fallback: regex ile item başlangıçlarını bul.
+    java.util.regex.Matcher m = startPat.matcher(s);
+        List<Integer> starts = new ArrayList<>();
+        while (m.find()) {
+            starts.add(m.start());
+        }
+        if (starts.isEmpty()) {
+            items.add(s);
+            return items;
+        }
+        for (int i = 0; i < starts.size(); i++) {
+            int st = starts.get(i);
+            int en = (i + 1 < starts.size()) ? starts.get(i + 1) : s.length();
+            String chunk = s.substring(st, en).trim();
+            if (!chunk.isEmpty()) {
+                // chunk içinde bir önceki item'dan kalan '|' veya ';' artifact olabilir.
+                while (chunk.startsWith("|") || chunk.startsWith(";")) chunk = chunk.substring(1).trim();
+                if (!chunk.isEmpty()) items.add(chunk);
+            }
+        }
+        return items;
+    }
+
+    // Tek bir item'ı parse eder. Eski formatı da destekler.
     public static EmbeddedDersKaydi embeddedDersKaydiParse(String item) {
         if (item == null) return null;
         item = item.trim();
@@ -148,8 +238,11 @@ public class DosyaIslemleri {
             return null;
         }
 
+        String vizeDegeri = "-";
+        String finalDegeri = "-";
         String notDegeri = "-";
         String devDegeri = "-";
+        String progDegeri = "";
         if (rest != null) {
             // rest: not=...;dev=... (veya bozuk veri: dev=3;dev=2 gibi)
             rest = rest.trim();
@@ -162,17 +255,61 @@ public class DosyaIslemleri {
                 if (pair.length != 2) continue;
                 String k = pair[0].trim();
                 String v = pair[1].trim();
-                if (k.equalsIgnoreCase("not")) {
+                if (k.equalsIgnoreCase("vize")) {
+                    vizeDegeri = v.isEmpty() ? "-" : v;
+                } else if (k.equalsIgnoreCase("final")) {
+                    finalDegeri = v.isEmpty() ? "-" : v;
+                } else if (k.equalsIgnoreCase("not")) {
                     notDegeri = v.isEmpty() ? "-" : v;
                 } else if (k.equalsIgnoreCase("dev")) {
                     // Eğer veri bozuksa ve birden fazla dev varsa, son dev değerini al.
                     devDegeri = v.isEmpty() ? "-" : v;
+                } else if (k.equalsIgnoreCase("prog")) {
+                    progDegeri = v == null ? "" : v.trim();
                 }
             }
         }
 
         // Kanonikleştir: dışarıya her zaman tek not/dev taşı.
-        return new EmbeddedDersKaydi(dersKodu, ogretmenId, notDegeri, devDegeri);
+        return new EmbeddedDersKaydi(dersKodu, ogretmenId, vizeDegeri, finalDegeri, notDegeri, devDegeri, progDegeri);
+    }
+
+    // Tek bir embedded item stringini (MAT101:1:...) kesin olarak kanonikleştirir:
+    // - aynı key birden fazla geçiyorsa SONUNCUSU geçerli olur
+    // - sonuç v3 formatında döner (vize/final/not/dev/prog)
+    //
+    // Not: Bazı bozuk dosyalarda tek bir token içinde birden fazla ders başlangıcı (DERS:OGRT)
+    // ve tekrar eden key zincirleri bulunabiliyor. Bu helper, token içindeki TÜM ders başlangıçlarını
+    // çıkarır ve her birini embeddedDersKaydiParse() ile (son key kazanır) parse edip döndürür.
+    private static List<EmbeddedDersKaydi> embeddedKayitlariTokenIcindanCikar(String token) {
+        List<EmbeddedDersKaydi> out = new ArrayList<>();
+        if (token == null) return out;
+        String s = token.replace("\r", "").replace("\n", "").trim();
+        if (s.isEmpty()) return out;
+
+        java.util.regex.Pattern startPat = java.util.regex.Pattern.compile("[A-Z]{2,5}\\d{3}:[0-9]+",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
+        java.util.regex.Matcher m = startPat.matcher(s);
+        List<Integer> starts = new ArrayList<>();
+        while (m.find()) starts.add(m.start());
+
+        // Normal/sağlıklı token: tek başlangıç.
+        if (starts.size() <= 1) {
+            EmbeddedDersKaydi dk = embeddedDersKaydiParse(s);
+            if (dk != null) out.add(dk);
+            return out;
+        }
+
+        for (int i = 0; i < starts.size(); i++) {
+            int st = starts.get(i);
+            int en = (i + 1 < starts.size()) ? starts.get(i + 1) : s.length();
+            String chunk = s.substring(st, en).trim();
+            while (chunk.startsWith("|") || chunk.startsWith(";")) chunk = chunk.substring(1).trim();
+            if (chunk.isEmpty()) continue;
+            EmbeddedDersKaydi dk = embeddedDersKaydiParse(chunk);
+            if (dk != null) out.add(dk);
+        }
+        return out;
     }
 
     // ogrenciId -> (dersKodu -> EmbeddedDersKaydi)
@@ -190,11 +327,12 @@ public class DosyaIslemleri {
                 String aldigi = p[6].trim();
                 Map<String, EmbeddedDersKaydi> dersKayitlari = new HashMap<>();
                 if (!aldigi.isBlank()) {
-                    String[] items = aldigi.split("\\|", -1);
+                    List<String> items = aldigiDerslerTokenizeGuvenli(aldigi);
                     for (String it : items) {
-                        EmbeddedDersKaydi dk = embeddedDersKaydiParse(it);
-                        if (dk == null) continue;
-                        dersKayitlari.put(dk.dersKodu, dk);
+                        for (EmbeddedDersKaydi dk : embeddedKayitlariTokenIcindanCikar(it)) {
+                            if (dk == null) continue;
+                            dersKayitlari.put(dk.dersKodu, dk);
+                        }
                     }
                 }
                 sonuc.put(ogrId, dersKayitlari);
@@ -239,38 +377,24 @@ public class DosyaIslemleri {
 
                 // Bu satırı güncelle
                 String aldigi = p[6].trim();
-                String[] itemsRaw = aldigi.isBlank() ? new String[0] : aldigi.split("\\|", -1);
+                List<String> itemsRaw = aldigi.isBlank() ? new ArrayList<>() : aldigiDerslerTokenizeGuvenli(aldigi);
 
                 boolean dersBulundu = false;
                 StringBuilder aldigiYeni = new StringBuilder();
 
                 for (String it : itemsRaw) {
                     if (it == null || it.trim().isEmpty()) continue;
-
-                    // Eğer eski bozuk veri varsa (dev=/not= tekrarları), önce kanonik hale getir.
-                    String token = it.replace("\r", "").replace("\n", "");
-                    int devCount = token.split("dev=", -1).length - 1;
-                    int notCount = token.split("not=", -1).length - 1;
-                    if (devCount > 1 || notCount > 1) {
-                        EmbeddedDersKaydi tmp = embeddedDersKaydiParse(token);
-                        if (tmp != null) token = tmp.toItemString();
+                    // Bazı bozuk dosyalarda tek token içinde birden fazla kayıt olabilir.
+                    for (EmbeddedDersKaydi dk : embeddedKayitlariTokenIcindanCikar(it)) {
+                        if (dk == null) continue;
+                        if (dk.dersKodu.equalsIgnoreCase(dersKodu) && dk.ogretmenId == ogretmenId) {
+                            if (not != null) dk.notDegeri = String.valueOf(not);
+                            if (devamsizlik != null) dk.devDegeri = String.valueOf(devamsizlik);
+                            dersBulundu = true;
+                        }
+                        if (aldigiYeni.length() > 0) aldigiYeni.append("|");
+                        aldigiYeni.append(dk.toItemString());
                     }
-
-                    EmbeddedDersKaydi dk = embeddedDersKaydiParse(token);
-                    if (dk == null) {
-                        // parse edilemeyen item'ı korumuyoruz (veri bozuk), ama dosyayı da komple bozmayalım.
-                        continue;
-                    }
-
-                    if (dk.dersKodu.equalsIgnoreCase(dersKodu) && dk.ogretmenId == ogretmenId) {
-                        if (not != null) dk.notDegeri = String.valueOf(not);
-                        if (devamsizlik != null) dk.devDegeri = String.valueOf(devamsizlik);
-                        // Bu item artık kanonik formda tek not/dev ile yazılsın.
-                        dersBulundu = true;
-                    }
-
-                    if (aldigiYeni.length() > 0) aldigiYeni.append("|");
-                    aldigiYeni.append(dk.toItemString());
                 }
 
                 if (!dersBulundu) {
@@ -292,6 +416,72 @@ public class DosyaIslemleri {
             return;
         }
 
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(dosyaYolu, false))) {
+            for (int i = 0; i < lines.size(); i++) {
+                bw.write(lines.get(i));
+                if (i < lines.size() - 1) bw.newLine();
+            }
+        }
+    }
+
+    // v3: vize/final güncellemesi (prog dahil diğer alanları korur).
+    // vize/final null => değişiklik yok.
+    public static void ogrenciDersKaydiGuncelleV3_VizeFinal(String dosyaYolu,
+                                                           int ogrenciId,
+                                                           String dersKodu,
+                                                           int ogretmenId,
+                                                           Integer vize,
+                                                           Integer fin) throws IOException {
+        List<String> lines = new ArrayList<>();
+        boolean bulundu = false;
+
+        try (BufferedReader br = new BufferedReader(new FileReader(dosyaYolu))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String rawLine = line;
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    lines.add(rawLine);
+                    continue;
+                }
+
+                String[] p = trimmed.split(";", -1);
+                if (p.length < 7) {
+                    lines.add(rawLine);
+                    continue;
+                }
+
+                int id = Integer.parseInt(p[0].trim());
+                if (id != ogrenciId) {
+                    lines.add(rawLine);
+                    continue;
+                }
+
+                String aldigi = p[6].trim();
+                List<String> itemsRaw = aldigi.isBlank() ? new ArrayList<>() : aldigiDerslerTokenizeGuvenli(aldigi);
+
+                StringBuilder aldigiYeni = new StringBuilder();
+                for (String it : itemsRaw) {
+                    if (it == null || it.trim().isEmpty()) continue;
+                    for (EmbeddedDersKaydi dk : embeddedKayitlariTokenIcindanCikar(it)) {
+                        if (dk == null) continue;
+                        if (dk.dersKodu.equalsIgnoreCase(dersKodu) && dk.ogretmenId == ogretmenId) {
+                            if (vize != null) dk.vizeDegeri = String.valueOf(vize);
+                            if (fin != null) dk.finalDegeri = String.valueOf(fin);
+                        }
+                        if (aldigiYeni.length() > 0) aldigiYeni.append("|");
+                        aldigiYeni.append(dk.toItemString());
+                    }
+                }
+
+                // Ders bulunamadıysa eklemiyoruz.
+                p[6] = aldigiYeni.toString().replace("\r", "").replace("\n", "");
+                lines.add(String.join(";", p).replace("\r", "").replace("\n", ""));
+                bulundu = true;
+            }
+        }
+
+        if (!bulundu) return;
         try (BufferedWriter bw = new BufferedWriter(new FileWriter(dosyaYolu, false))) {
             for (int i = 0; i < lines.size(); i++) {
                 bw.write(lines.get(i));
@@ -487,17 +677,104 @@ public class DosyaIslemleri {
                 String aldigi = p[6].trim();
                 Map<String, Integer> dersOgretmen = new HashMap<>();
                 if (!aldigi.isBlank()) {
-                    String[] items = aldigi.split("\\|", -1);
-                    for (String item : items) {
-                        EmbeddedDersKaydi dk = embeddedDersKaydiParse(item);
-                        if (dk == null) continue;
-                        dersOgretmen.put(dk.dersKodu, dk.ogretmenId);
+                    List<String> items = aldigiDerslerTokenizeGuvenli(aldigi);
+                    for (String it : items) {
+                        for (EmbeddedDersKaydi dk : embeddedKayitlariTokenIcindanCikar(it)) {
+                            if (dk == null) continue;
+                            dersOgretmen.put(dk.dersKodu, dk.ogretmenId);
+                        }
                     }
                 }
                 sonuc.put(ogrId, dersOgretmen);
             }
         }
         return sonuc;
+    }
+
+    // ===== Migrate: ogrenciler_yeni.txt embedded kayıtlarını v3 kanonik formata çevir =====
+    // - Eski item'lar (DERS:OGRT veya :not/dev) korunur ve v3 formuna yazılır.
+    // - prog boşsa ve ogretmenProgramlari verildiyse doldurulur.
+    // - Dosya başlık satırları (#) korunur.
+    public static boolean ogrencilerDosyasiMigrateV3(String ogrencilerDosyaYolu,
+                                                     Map<Integer, Map<String, List<String>>> ogretmenProgramlari) throws IOException {
+        List<String> lines = new ArrayList<>();
+        boolean degisti = false;
+
+        try (BufferedReader br = new BufferedReader(new FileReader(ogrencilerDosyaYolu))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String rawLine = line;
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    lines.add(rawLine);
+                    continue;
+                }
+
+                String[] p = trimmed.split(";", -1);
+                if (p.length < 7) {
+                    lines.add(rawLine);
+                    continue;
+                }
+
+                String aldigi = p[6].trim();
+                if (aldigi.isBlank()) {
+                    lines.add(rawLine);
+                    continue;
+                }
+
+                List<String> itemsRaw = aldigiDerslerTokenizeGuvenli(aldigi);
+                // Aynı ders kaydı tek token içinde şişmiş olabilir. Bu durumda kayıtları dersKodu+ogretmenId bazında
+                // tekilleştirip en son görülen değerleri alacağız.
+                Map<String, EmbeddedDersKaydi> uniq = new HashMap<>();
+
+                for (String it : itemsRaw) {
+                    for (EmbeddedDersKaydi dk : embeddedKayitlariTokenIcindanCikar(it)) {
+                        if (dk == null) continue;
+
+                        // prog eksikse doldur
+                        if ((dk.programDegeri == null || dk.programDegeri.isBlank()) && ogretmenProgramlari != null) {
+                            Map<String, List<String>> dersMap = ogretmenProgramlari.get(dk.ogretmenId);
+                            if (dersMap != null) {
+                                List<String> slots = dersMap.get(dk.dersKodu);
+                                if (slots != null && !slots.isEmpty()) dk.programDegeri = String.join(",", slots);
+                            }
+                        }
+
+                        // uniq key: ders+ogretmen
+                        String key = dk.dersKodu.toUpperCase() + ":" + dk.ogretmenId;
+                        uniq.put(key, dk);
+                    }
+                }
+
+                // uniq map'i tekrar '|' ile yaz. Sıralama: deterministik olsun diye key'e göre.
+                List<String> keys = new ArrayList<>(uniq.keySet());
+                java.util.Collections.sort(keys);
+                StringBuilder yeni = new StringBuilder();
+                for (String k : keys) {
+                    EmbeddedDersKaydi dk = uniq.get(k);
+                    if (dk == null) continue;
+                    String canon = dk.toItemString();
+                    if (yeni.length() > 0) yeni.append('|');
+                    yeni.append(canon);
+                }
+
+                // Kıyas: eski aldigi ile yeni değer
+                String yeniAldigi = yeni.toString().replace("\r", "").replace("\n", "");
+                if (!yeniAldigi.equals(p[6])) degisti = true;
+                p[6] = yeniAldigi;
+                lines.add(String.join(";", p).replace("\r", "").replace("\n", ""));
+            }
+        }
+
+        if (!degisti) return false;
+
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(ogrencilerDosyaYolu, false))) {
+            for (int i = 0; i < lines.size(); i++) {
+                bw.write(lines.get(i));
+                if (i < lines.size() - 1) bw.newLine();
+            }
+        }
+        return true;
     }
 
 }

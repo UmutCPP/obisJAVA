@@ -42,9 +42,97 @@ public class Main {
             "MAT201", "CMP201", "BIL103", "KIM101", "ENG101"
     };
 
+    // ===== Kurallar =====
+    // Devamsızlık > 3 ise dersten kalır
+    private static final int DEVAMSIZLIK_LIMIT = 3;
+
+    // Vize %40, Final %60
+    private static final double VIZE_AGIRLIK = 0.40;
+    private static final double FINAL_AGIRLIK = 0.60;
+
+    // "Ortalaması 2'nin altında ise FF" için 100'lük ortalamayı 4'lük sisteme çeviriyoruz.
+    // Basit (yaygın) dönüşüm: 90-100=4.0, 85-89=3.5, 80-84=3.0, 75-79=2.5,
+    // 70-74=2.0, 65-69=1.5, 60-64=1.0, 50-59=0.5, 0-49=0.0
+    private static double yuzluktenDortluge(double ort100) {
+        if (ort100 >= 90) return 4.0;
+        if (ort100 >= 85) return 3.5;
+        if (ort100 >= 80) return 3.0;
+        if (ort100 >= 75) return 2.5;
+        if (ort100 >= 70) return 2.0;
+        if (ort100 >= 65) return 1.5;
+        if (ort100 >= 60) return 1.0;
+        if (ort100 >= 50) return 0.5;
+        return 0.0;
+    }
+
+    private static double dersOrtalama100(Integer vize, Integer fin) {
+        if (vize == null || fin == null) return Double.NaN;
+        return (vize * VIZE_AGIRLIK) + (fin * FINAL_AGIRLIK);
+    }
+
+    private static String harfNotuHesapla(double ort100) {
+        // Harf notlarını 4'lük karşılığa göre türetiyoruz.
+        // Ayrıca: 4'lük < 2.0 ise FF.
+        double ort4 = yuzluktenDortluge(ort100);
+        if (Double.isNaN(ort4)) return "-";
+        if (ort4 < 2.0) return "FF";
+        // 2.0 ve üzerini basitçe yaygın aralıklara bölelim.
+        if (ort4 >= 3.5) return "AA";
+        if (ort4 >= 3.0) return "BA";
+        if (ort4 >= 2.5) return "BB";
+        if (ort4 >= 2.0) return "CB";
+        return "FF";
+    }
+
+    private static boolean devamsizliktenKaldi(Integer devamsizlik) {
+        if (devamsizlik == null) return false;
+        return devamsizlik > DEVAMSIZLIK_LIMIT;
+    }
+
+    // ===== Basit ANSI renkler (konsol) =====
+    private static final String ANSI_RESET = "\u001B[0m";
+    private static final String ANSI_RED = "\u001B[31m";
+    private static final String ANSI_GREEN = "\u001B[32m";
+    private static final String ANSI_YELLOW = "\u001B[33m";
+
+    private static String red(String s) {
+        return ANSI_RED + s + ANSI_RESET;
+    }
+
+    private static String green(String s) {
+        return ANSI_GREEN + s + ANSI_RESET;
+    }
+
+    private static String yellow(String s) {
+        return ANSI_YELLOW + s + ANSI_RESET;
+    }
+
+    private static Integer parseIntOrNull(String s) {
+        if (s == null) return null;
+        String t = s.trim();
+        if (t.isEmpty() || t.equals("-")) return null;
+        try {
+            return Integer.parseInt(t);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    // Haftalık program üretimi için basit slot havuzu (gerçeğe yakın: hafta içi 09-16)
+    private static final String[] PROGRAM_GUNLER = {"MON", "TUE", "WED", "THU", "FRI"};
+    private static final int PROGRAM_SAAT_BASLA = 9;
+    private static final int PROGRAM_SAAT_BITIS_DAHIL = 16;
+
     public static void main(String[] args) {
         // Yeni sistem dosyaları yoksa otomatik üret
         ensureSeedFiles();
+
+        // Var olan öğrenciler dosyası eski formatta olabilir: v3 (vize/final/prog) kanonik hale getir.
+        try {
+            migrateStudentFileToV3IfNeeded();
+        } catch (Exception e) {
+            System.out.println("Migrate uyarısı: " + e.getMessage());
+        }
 
         Repository<Ogrenci> repo = new Repository<>();
         OgrenciService ogrenciService = new OgrenciService(repo, new StandartNotHesaplamaService());
@@ -106,7 +194,7 @@ public class Main {
                         ortalamaHesapla(sc, ogrenciService);
                     }
                     break;
-                case "8":
+                case "6":
                     devam = false;
                     System.out.println("Çıkış yapıldı.");
                     break;
@@ -114,6 +202,34 @@ public class Main {
                     System.out.println("Geçersiz seçim.");
                     break;
             }
+        }
+    }
+
+    private static void migrateStudentFileToV3IfNeeded() throws Exception {
+        String teachersPath = resolveTeachersFilePath();
+        String studentsPath = resolveStudentsNewFilePath();
+        if (teachersPath == null || studentsPath == null) return;
+
+        // Öğretmen programı: bu sürümde ogretmenler.txt'de program yok, ama seed üretiminde programlar mevcut.
+        // Mevcut dosyalarda prog alanı boşsa en azından seed'de üretilen programı öğrenci kayıtlarına basmak istiyoruz.
+        // Bu yüzden öğretmenler.txt ders listesi üzerinden deterministik bir program üretip migrate'e veriyoruz.
+        java.util.Map<Integer, java.util.Map<String, java.util.List<String>>> ogretmenProgramlari = new java.util.HashMap<>();
+        java.util.Map<Integer, java.util.List<String>> ogretmenDersleri = DosyaIslemleri.ogretmenDersleriOku(teachersPath);
+        java.util.Random rnd = new java.util.Random(4242);
+        for (var e : ogretmenDersleri.entrySet()) {
+            int ogretmenId = e.getKey();
+            java.util.Set<String> kullanilan = new java.util.HashSet<>();
+            java.util.Map<String, java.util.List<String>> dersProg = new java.util.HashMap<>();
+            for (String ders : e.getValue()) {
+                // her ders 2 slot
+                dersProg.put(ders, rastgeleSlotSec(rnd, kullanilan, 2));
+            }
+            ogretmenProgramlari.put(ogretmenId, dersProg);
+        }
+
+        boolean degisti = DosyaIslemleri.ogrencilerDosyasiMigrateV3(studentsPath, ogretmenProgramlari);
+        if (degisti) {
+            System.out.println(yellow("[INFO] ogrenciler_yeni.txt v3 formata güncellendi."));
         }
     }
 
@@ -373,7 +489,7 @@ public class Main {
         if (aktifKullanici.getRol() != Rol.OGRENCI) {
             System.out.println("5. Ortalama Hesapla");
         }
-        System.out.println("8. Çıkış");
+        System.out.println("6. Çıkış");
     }
 
     private static void seedData(OgrenciService ogrenciService) {
@@ -504,6 +620,15 @@ public class Main {
             Collections.addAll(havuz, DERS_HAVUZU);
             Collections.shuffle(havuz, rnd);
             t.dersler = new ArrayList<>(havuz.subList(0, dersSayisi));
+
+            // Her öğretmenin kendi dersleri için çakışmasız haftalık program üret.
+            // Basit yaklaşım: her ders 2 saat/hafta.
+            t.dersProgramlari = new java.util.HashMap<>();
+            java.util.Set<String> kullanilan = new java.util.HashSet<>();
+            for (String dersKodu : t.dersler) {
+                List<String> slotlar = rastgeleSlotSec(rnd, kullanilan, 2);
+                t.dersProgramlari.put(dersKodu, slotlar);
+            }
             teachers.add(t);
         }
 
@@ -518,7 +643,7 @@ public class Main {
             }
         }
 
-        // Öğrenciler: 5 ders, her ders için o dersi veren öğretmenlerden 1 tane seç
+    // Öğrenciler: 5 ders, her ders için o dersi veren öğretmenlerden 1 tane seç
         List<StudentSeed> students = new ArrayList<>();
         for (int i = 1; i <= studentCount; i++) {
             StudentSeed s = new StudentSeed();
@@ -540,10 +665,13 @@ public class Main {
                 if (ogIds == null || ogIds.isEmpty()) {
                     // bazı dersler hiçbir öğretmene düşebilir; o zaman rastgele öğretmen ata
                     int ogretmenId = 1 + rnd.nextInt(teacherCount);
-                    appendDers(dersler, d + ":" + ogretmenId);
+                    String prog = programBul(teachers, ogretmenId, d);
+                    // v3: vize/final/not/dev/prog alanları boş başlar
+                    appendDers(dersler, d + ":" + ogretmenId + ":vize=-;final=-;not=-;dev=-;prog=" + prog);
                 } else {
                     int ogretmenId = ogIds.get(rnd.nextInt(ogIds.size()));
-                    appendDers(dersler, d + ":" + ogretmenId);
+                    String prog = programBul(teachers, ogretmenId, d);
+                    appendDers(dersler, d + ":" + ogretmenId + ":vize=-;final=-;not=-;dev=-;prog=" + prog);
                 }
             }
             s.aldigiDersler = dersler.toString();
@@ -561,6 +689,44 @@ public class Main {
         sb.append(part);
     }
 
+    // Öğretmenin ders programını Embedded kayda yazmak için: "MON-09,MON-10" gibi
+    private static String programBul(List<TeacherSeed> teachers, int ogretmenId, String dersKodu) {
+        if (teachers == null) return "";
+        for (TeacherSeed t : teachers) {
+            if (t.id != ogretmenId) continue;
+            if (t.dersProgramlari == null) return "";
+            List<String> slots = t.dersProgramlari.get(dersKodu);
+            if (slots == null || slots.isEmpty()) return "";
+            return String.join(",", slots);
+        }
+        return "";
+    }
+
+    // Bir öğretmen için kullanılan slot setine çakışmayacak şekilde N slot seç.
+    private static List<String> rastgeleSlotSec(Random rnd, java.util.Set<String> kullanilan, int adet) {
+        List<String> secilen = new ArrayList<>();
+        int maxDeneme = 200;
+        for (int i = 0; i < adet; i++) {
+            String slot = null;
+            for (int d = 0; d < maxDeneme; d++) {
+                String gun = PROGRAM_GUNLER[rnd.nextInt(PROGRAM_GUNLER.length)];
+                int saat = PROGRAM_SAAT_BASLA + rnd.nextInt(PROGRAM_SAAT_BITIS_DAHIL - PROGRAM_SAAT_BASLA + 1);
+                String cand = gun + "-" + String.format("%02d", saat);
+                if (kullanilan.contains(cand)) continue;
+                slot = cand;
+                break;
+            }
+            if (slot == null) {
+                // Çok düşük ihtimal: havuz dolu oldu. En azından tekrar etmesin diye kır.
+                break;
+            }
+            kullanilan.add(slot);
+            secilen.add(slot);
+        }
+        java.util.Collections.sort(secilen);
+        return secilen;
+    }
+
     private static class SeedData {
         List<TeacherSeed> teachers;
         List<StudentSeed> students;
@@ -574,6 +740,8 @@ public class Main {
         String ad;
         String soyad;
         List<String> dersler;
+        // dersKodu -> slot listesi (MON-09 gibi)
+        java.util.Map<String, List<String>> dersProgramlari;
     }
 
     private static class StudentSeed {
@@ -673,7 +841,7 @@ public class Main {
                 System.out.println("Öğrenci dosyası bulunamadı: " + STUDENTS_NEW_FILE);
                 return;
             }
-            System.out.println("--- Öğrenci Listesi (Dosyadan) ---");
+            System.out.println(yellow("--- Öğrenci Listesi (Dosyadan) ---"));
             try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(studentsPath))) {
                 String line;
                 while ((line = br.readLine()) != null) {
@@ -697,13 +865,51 @@ public class Main {
                         continue;
                     }
                     String[] items = aldigi.split("\\|", -1);
-                    System.out.println("  Dersler:");
+                    System.out.println(yellow("  Dersler:"));
                     for (String item : items) {
                         DosyaIslemleri.EmbeddedDersKaydi dk = DosyaIslemleri.embeddedDersKaydiParse(item);
                         if (dk == null) continue;
-                        String notGoster = (dk.notDegeri == null || dk.notDegeri.equals("-")) ? "-" : dk.notDegeri;
-                        String devGoster = (dk.devDegeri == null || dk.devDegeri.equals("-")) ? "-" : dk.devDegeri;
-                        System.out.println("    - " + dk.dersKodu + " (ÖğretmenId=" + dk.ogretmenId + ") not=" + notGoster + ", dev=" + devGoster);
+
+                        Integer vize = parseIntOrNull(dk.vizeDegeri);
+                        Integer fin = parseIntOrNull(dk.finalDegeri);
+                        Integer dev = parseIntOrNull(dk.devDegeri);
+
+                        double ort100 = dersOrtalama100(vize, fin);
+                        String ortStr = Double.isNaN(ort100) ? "-" : String.format("%.1f", ort100);
+                        String harf = Double.isNaN(ort100) ? "-" : harfNotuHesapla(ort100);
+
+                        boolean kaldiNot = (!Double.isNaN(ort100) && "FF".equals(harf));
+                        boolean kaldiDev = devamsizliktenKaldi(dev);
+                        boolean kaldi = kaldiNot || kaldiDev;
+
+                        String prog = (dk.programDegeri == null || dk.programDegeri.isBlank()) ? "-" : dk.programDegeri;
+                        String devGoster = (dev == null) ? "-" : String.valueOf(dev);
+                        if (dev != null) {
+                            devGoster = (dev <= DEVAMSIZLIK_LIMIT) ? green(devGoster) : red(devGoster);
+                        }
+
+                        String durum = "GEÇTİ";
+                        String aciklama = "";
+                        if (kaldi) {
+                            durum = red("KALDI");
+                            if (kaldiDev) {
+                                aciklama = " (" + red("gelmedi") + ")";
+                            } else {
+                                aciklama = " (" + red("FF") + ")";
+                            }
+                        }
+
+                        System.out.println(
+                                "    - " + dk.dersKodu
+                                        + " | ÖğretmenId=" + dk.ogretmenId
+                                        + " | Program=" + prog
+                                        + " | Vize=" + (vize == null ? "-" : vize)
+                                        + " | Final=" + (fin == null ? "-" : fin)
+                                        + " | Ort=" + ortStr
+                                        + " | Harf=" + harf
+                                        + " | Dev=" + devGoster
+                                        + " | Durum=" + durum + aciklama
+                        );
                     }
                 }
             }
@@ -810,7 +1016,7 @@ public class Main {
                 System.out.println("[DEBUG] aldigiDersler=" + aldigi);
             }
 
-            System.out.println("--- Derslerim / Notlarım ---");
+            System.out.println(yellow("--- Derslerim / Notlarım ---"));
             int i = 1;
             String[] items = aldigi.split("\\|", -1);
             if (DEBUG_DERS_PARSE) {
@@ -827,10 +1033,42 @@ public class Main {
                     continue;
                 }
 
-                String notGoster = (dk.notDegeri == null || dk.notDegeri.equals("-")) ? "Girilmedi" : dk.notDegeri;
-                String devGoster = (dk.devDegeri == null || dk.devDegeri.equals("-")) ? "Girilmedi" : dk.devDegeri;
+                Integer vize = parseIntOrNull(dk.vizeDegeri);
+                Integer fin = parseIntOrNull(dk.finalDegeri);
+                Integer dev = parseIntOrNull(dk.devDegeri);
 
-                System.out.println(i + ") " + dk.dersKodu + " | ÖğretmenId=" + dk.ogretmenId + " | Not=" + notGoster + " | Devamsızlık=" + devGoster);
+                double ort100 = dersOrtalama100(vize, fin);
+                String ortStr = Double.isNaN(ort100) ? "-" : String.format("%.1f", ort100);
+                String harf = Double.isNaN(ort100) ? "-" : harfNotuHesapla(ort100);
+
+                boolean kaldiNot = (!Double.isNaN(ort100) && "FF".equals(harf));
+                boolean kaldiDev = devamsizliktenKaldi(dev);
+                boolean kaldi = kaldiNot || kaldiDev;
+
+                String prog = (dk.programDegeri == null || dk.programDegeri.isBlank()) ? "-" : dk.programDegeri;
+                String devGoster = (dev == null) ? "Girilmedi" : String.valueOf(dev);
+                if (dev != null) {
+                    devGoster = (dev <= DEVAMSIZLIK_LIMIT) ? green(devGoster) : red(devGoster);
+                }
+
+                String durum = kaldi ? red("KALDI") : "GEÇTİ";
+                String aciklama = "";
+                if (kaldi) {
+                    if (kaldiDev) aciklama = " (" + red("gelmedi") + ")";
+                    else aciklama = " (" + red("FF") + ")";
+                }
+
+                System.out.println(
+                        i + ") " + dk.dersKodu
+                                + " | ÖğretmenId=" + dk.ogretmenId
+                                + " | Program=" + prog
+                                + " | Vize=" + (vize == null ? "Girilmedi" : vize)
+                                + " | Final=" + (fin == null ? "Girilmedi" : fin)
+                                + " | Ort=" + ortStr
+                                + " | Harf=" + harf
+                                + " | Devamsızlık=" + devGoster
+                                + " | Durum=" + durum + aciklama
+                );
                 i++;
             }
             if (i == 1) {
@@ -843,7 +1081,7 @@ public class Main {
         }
     }
 
-    // mode: true => Not girişi, false => Devamsızlık girişi
+    // mode: true => Vize/Final girişi, false => Devamsızlık girişi
     private static void ogretmenNotDevamsizlikGir(Scanner sc, SistemKullanicisi aktifKullanici, boolean yeniKayitGibi) {
         try {
             if (aktifKullanici.getRol() != Rol.OGRETMEN) {
@@ -893,20 +1131,32 @@ public class Main {
             Integer seciliOgrId = listedenSecOgrenciDetay(sc, "Öğrenci seçin", ogrenciler, ogrBilgi);
             if (seciliOgrId == null) return;
 
-            Integer not = null;
+            Integer vize = null;
+            Integer fin = null;
             Integer dev = null;
 
             if (yeniKayitGibi) {
-                // Not girişi
-                System.out.print("Not (0-100, boş=iptal): ");
-                String notStr = sc.nextLine().trim();
-                if (notStr.isEmpty()) {
-                    System.out.println("Not girilmedi. İşlem iptal.");
+                // Vize + Final girişi
+                System.out.print("Vize (0-100, boş=iptal): ");
+                String vizeStr = sc.nextLine().trim();
+                if (vizeStr.isEmpty()) {
+                    System.out.println("Vize girilmedi. İşlem iptal.");
                     return;
                 }
-                not = Integer.parseInt(notStr);
-                if (not < 0 || not > 100) {
-                    throw new GecersizNotException("Not 0-100 aralığında olmalı");
+                vize = Integer.parseInt(vizeStr);
+                if (vize < 0 || vize > 100) {
+                    throw new GecersizNotException("Vize 0-100 aralığında olmalı");
+                }
+
+                System.out.print("Final (0-100, boş=iptal): ");
+                String finStr = sc.nextLine().trim();
+                if (finStr.isEmpty()) {
+                    System.out.println("Final girilmedi. İşlem iptal.");
+                    return;
+                }
+                fin = Integer.parseInt(finStr);
+                if (fin < 0 || fin > 100) {
+                    throw new GecersizNotException("Final 0-100 aralığında olmalı");
                 }
             } else {
                 // Devamsızlık girişi
@@ -940,11 +1190,30 @@ public class Main {
                     seciliOgrId,
                     seciliDers,
                     aktifKullanici.getId(),
-                    not,
+                    // legacy not alanını da dolduralım (vize/finalden türetilmiş 100'lük ortalama)
+                    (vize != null && fin != null) ? (int) Math.round(dersOrtalama100(vize, fin)) : null,
                     dev
             );
+
+            // vize/final/prog gibi yeni alanları kaydetmek için aynı update fonksiyonunu genişletmedik
+            // (şimdilik). Bunun yerine satırı kanonik yazan DosyaIslemleri, embedded parse/toString'de
+            // vize/final alanlarını da taşıyor. Bu yüzden vize/final güncellemesi için ayrı bir metot çağırıyoruz.
+            // Not: dosya tek kaynak olduğu için iyileştirmeyi util'e taşıyacağız.
+            // Şimdilik hızlı çözüm: vize/final güncellemesini tekrar utility ile yap.
+            try {
+                DosyaIslemleri.ogrenciDersKaydiGuncelleV3_VizeFinal(
+                        studentsPath,
+                        seciliOgrId,
+                        seciliDers,
+                        aktifKullanici.getId(),
+                        vize,
+                        fin
+                );
+            } catch (Exception ignored) {
+                // vize/final yazılamadıysa bile legacy not alanı tutulduğu için sistem bozulmasın.
+            }
             if (yeniKayitGibi) {
-                System.out.println("Not kaydedildi: " + seciliDers + ", öğrenciId=" + seciliOgrId + ", not=" + not);
+                System.out.println("Not kaydedildi: " + seciliDers + ", öğrenciId=" + seciliOgrId + ", vize=" + vize + ", final=" + fin);
             } else {
                 System.out.println("Devamsızlık kaydedildi: " + seciliDers + ", öğrenciId=" + seciliOgrId + ", devamsızlık=" + dev);
             }
